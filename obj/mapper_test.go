@@ -5,6 +5,8 @@ import (
 	"math"
 	"reflect"
 	"testing"
+	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -365,132 +367,6 @@ func TestMapMapDst(t *testing.T) {
 	}
 }
 
-func TestMapWithFieldMaps(t *testing.T) {
-	type IntStruct struct {
-		IntField int
-	}
-	type WrappedAllTypes struct {
-		AllTypes testAllTypes
-	}
-	tests := []struct {
-		name      string
-		src       any
-		dst       any
-		cfg       []FieldMapConfig
-		expected  any
-		configErr error
-		mapErr    error
-	}{
-		{
-			name: "Map source to dest field name",
-			src:  testAllTypes{Int: 1},
-			dst:  &IntStruct{},
-			cfg: []FieldMapConfig{{
-				Source:      "Int",
-				Destination: "IntField",
-			}},
-			expected: &IntStruct{1},
-		},
-		{
-			name: "Map source to dest field name with func",
-			src:  testAllTypes{Int: 1},
-			dst:  &IntStruct{},
-			cfg: []FieldMapConfig{{
-				Source:              "Int",
-				Destination:         "IntField",
-				GetDestinationValue: func(source any) (any, error) { return 2, nil },
-			}},
-			expected: &IntStruct{2},
-		},
-		{
-			name: "Map source to dest field name with func error",
-			src:  testAllTypes{Int: 1},
-			dst:  &IntStruct{},
-			cfg: []FieldMapConfig{{
-				Source:              "Int",
-				Destination:         "IntField",
-				GetDestinationValue: func(source any) (any, error) { return nil, fmt.Errorf("Test Error") },
-			}},
-			mapErr: fmt.Errorf("Test Error"),
-		},
-		{
-			name: "With func",
-			src:  testAllTypes{Int: 1},
-			dst:  &testAllTypes{},
-			cfg: []FieldMapConfig{{
-				Destination:         "Int",
-				GetDestinationValue: func(source any) (any, error) { return 2, nil },
-			}},
-			expected: &testAllTypes{Int: 2},
-		},
-		{
-			name: "Struct within struct",
-			src:  WrappedAllTypes{testAllTypes{Int: 1}},
-			dst:  &WrappedAllTypes{testAllTypes{}},
-			cfg: []FieldMapConfig{{
-				Destination:         "Int",
-				GetDestinationValue: func(source any) (any, error) { return 2, nil },
-			}},
-			expected: &WrappedAllTypes{testAllTypes{Int: 2}},
-		},
-	}
-	// TODO: add error cases
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			mapper := NewMapper()
-			var err error
-			if reflect.TypeOf(test.dst).Elem() == reflect.TypeOf(testAllTypes{}) {
-				err = ConfigureFieldMaps[testAllTypes, testAllTypes](mapper, test.cfg...)
-			} else if reflect.TypeOf(test.dst).Elem() == reflect.TypeOf(WrappedAllTypes{}) {
-				err = ConfigureFieldMaps[testAllTypes, testAllTypes](mapper, test.cfg...)
-			} else {
-				err = ConfigureFieldMaps[testAllTypes, IntStruct](mapper, test.cfg...)
-			}
-			if test.configErr != nil || err != nil {
-				assert.Equal(t, test.configErr, err)
-				return
-			}
-
-			err = mapper.Map(test.src, test.dst)
-			if test.mapErr != nil || err != nil {
-				assert.Equal(t, test.mapErr, err)
-				return
-			}
-			assert.Equal(t, test.expected, test.dst)
-		})
-	}
-}
-
-func TestConfigureFieldMapsSourceNotStruct(t *testing.T) {
-	mapper := NewMapper()
-	cfg := FieldMapConfig{
-		Source:      "Int",
-		Destination: "Int",
-	}
-	err := ConfigureFieldMaps[int, testAllTypes](mapper, cfg)
-	assert.Equal(t, fmt.Errorf("sourceT and destinationT must be structs"), err)
-}
-
-func TestConfigureFieldMapsDestinationNotStruct(t *testing.T) {
-	mapper := NewMapper()
-	cfg := FieldMapConfig{
-		Source:      "Int",
-		Destination: "Int",
-	}
-	err := ConfigureFieldMaps[testAllTypes, int](mapper, cfg)
-	assert.Equal(t, fmt.Errorf("sourceT and destinationT must be structs"), err)
-}
-
-func TestConfigureFieldMapsDestinationFieldEmpty(t *testing.T) {
-	mapper := NewMapper()
-	cfg := FieldMapConfig{
-		Source: "Int",
-	}
-	err := ConfigureFieldMaps[testAllTypes, testAllTypes](mapper, cfg)
-	assert.Equal(t, fmt.Errorf("destination field names must be provided"), err)
-}
-
 // AI generated code start
 type testUserDTO struct {
 	ID             int
@@ -631,32 +507,6 @@ func TestMapWithSetterNoField(t *testing.T) {
 	assert.Equal(t, dto.ID, user.withSetterID, "ID not equal")
 }
 
-func TestMapWithSetterAndFieldMap(t *testing.T) {
-
-	dto := testUserDTO{
-		ID:             1,
-		withGetterName: "John",
-	}
-
-	user := testUserWithSetter{}
-	mapper := NewMapper()
-	err := ConfigureFieldMaps[testUserDTO, testUserWithSetter](mapper, FieldMapConfig{
-		Source:      "Name",
-		Destination: "Name",
-		GetDestinationValue: func(source any) (any, error) {
-			return "Mr. " + source.(string), nil
-		},
-	})
-
-	assert.Nil(t, err, "ConfigureFieldMaps returned an error")
-
-	err = mapper.Map(dto, &user)
-
-	assert.Nil(t, err, "Map returned an error")
-	assert.Equal(t, dto.ID, user.withSetterID, "ID not equal")
-	assert.Equal(t, "Mr. Mr. John", user.withSetterName, "Name not equal")
-}
-
 // AI generated code start
 func TestMapWithInterfaceField(t *testing.T) {
 	type StructWithInterface struct {
@@ -789,56 +639,385 @@ func TestMapNotAddressable(t *testing.T) {
 // AI generated code end
 
 // AI generated code start
-func TestMapWithInitializedInterfaceField(t *testing.T) {
-	type StructWithInterface struct {
-		Data interface{}
+func TestMapWithTypeConverter(t *testing.T) {
+	type Source struct {
+		Value string
 	}
-
-	src := StructWithInterface{Data: "test string"}
-	dst := StructWithInterface{Data: ""} // Initialized with the same type as the source
-
-	mapper := NewMapper()
-	err := mapper.Map(src, &dst)
-
-	assert.Equal(t, ErrNotAddresable, err, "Error not equal")
-	assert.NotEqual(t, src.Data, dst.Data, "Data equal")
-}
-
-// AI generated code end
-// AI generated code start
-func TestMapWithNestedStructAndCustomFunction(t *testing.T) {
-	type InnerStruct struct {
+	type Destination struct {
 		Value int
 	}
 
-	type OuterStruct struct {
-		Inner interface{}
-	}
-
-	src := OuterStruct{
-		Inner: InnerStruct{Value: 42},
-	}
-
-	dst := OuterStruct{}
-
 	mapper := NewMapper()
-	err := ConfigureFieldMaps[OuterStruct, OuterStruct](mapper, FieldMapConfig{
-		Source:      "Inner",
-		Destination: "Inner",
-		GetDestinationValue: func(source any) (any, error) {
-			if inner, ok := source.(InnerStruct); ok {
-				return InnerStruct{Value: inner.Value * 2}, nil
-			}
-			fmt.Println(reflect.TypeOf(source))
-			return nil, fmt.Errorf("unexpected type")
-		},
+	AddTypeConverter[string, int](mapper, func(src any) (any, error) {
+		str, ok := src.(string)
+		if !ok {
+			return nil, ErrMismatchType
+		}
+		switch str {
+		case "one":
+			return 1, nil
+		case "two":
+			return 2, nil
+		default:
+			return 0, nil
+		}
 	})
 
-	assert.Nil(t, err, "ConfigureFieldMaps returned an error")
+	src := Source{Value: "one"}
+	dst := Destination{}
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err, "Map returned an error")
+	assert.Equal(t, 1, dst.Value, "Type converter did not convert value correctly")
 
+	src = Source{Value: "two"}
+	dst = Destination{}
 	err = mapper.Map(src, &dst)
 	assert.Nil(t, err, "Map returned an error")
-	assert.Equal(t, InnerStruct{Value: 84}, dst.Inner, "Inner not equal")
+	assert.Equal(t, 2, dst.Value, "Type converter did not convert value correctly")
+
+	src = Source{Value: "unknown"}
+	dst = Destination{}
+	err = mapper.Map(src, &dst)
+	assert.Nil(t, err, "Map returned an error")
+	assert.Equal(t, 0, dst.Value, "Type converter did not convert value correctly")
+}
+
+func TestMapWithTypeConverterError(t *testing.T) {
+	type Source struct {
+		Value string
+	}
+	type Destination struct {
+		Value int
+	}
+
+	mapper := NewMapper()
+	AddTypeConverter[string, int](mapper, func(src any) (any, error) {
+		return nil, fmt.Errorf("conversion error")
+	})
+
+	src := Source{Value: "fail"}
+	dst := Destination{}
+	err := mapper.Map(src, &dst)
+	assert.EqualError(t, err, "conversion error")
+}
+
+func TestMapWithTypeConverterMismatchType(t *testing.T) {
+	type Source struct {
+		Value string
+	}
+	type Destination struct {
+		Value int
+	}
+
+	mapper := NewMapper()
+	AddTypeConverter[string, int](mapper, func(src any) (any, error) {
+		return "not an int", nil
+	})
+
+	src := Source{Value: "fail"}
+	dst := Destination{}
+	err := mapper.Map(src, &dst)
+	assert.Equal(t, ErrMismatchType, err)
+}
+
+//
+// AI generated code end
+//
+// AI generated code start
+
+func TestMapAssignableStruct_timeTime(t *testing.T) {
+	type Src struct {
+		CreatedAt time.Time
+	}
+	type Dst struct {
+		CreatedAt time.Time
+	}
+
+	now := time.Now()
+	src := Src{CreatedAt: now}
+	dst := Dst{}
+
+	mapper := NewMapper()
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err, "Map returned an error")
+	assert.Equal(t, src.CreatedAt, dst.CreatedAt, "time.Time values not equal")
+}
+
+func TestMapAssignableStruct_timeTimePointer(t *testing.T) {
+	type Src struct {
+		CreatedAt *time.Time
+	}
+	type Dst struct {
+		CreatedAt *time.Time
+	}
+
+	now := time.Now()
+	src := Src{CreatedAt: &now}
+	dst := Dst{}
+
+	mapper := NewMapper()
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err, "Map returned an error")
+	assert.NotNil(t, dst.CreatedAt, "Destination pointer is nil")
+	assert.Equal(t, *src.CreatedAt, *dst.CreatedAt, "time.Time pointer values not equal")
+}
+
+func TestMapAssignableStruct_timeTimeSlice(t *testing.T) {
+	type Src struct {
+		Times []time.Time
+	}
+	type Dst struct {
+		Times []time.Time
+	}
+
+	now := time.Now()
+	src := Src{Times: []time.Time{now, now.Add(time.Hour)}}
+	dst := Dst{}
+
+	mapper := NewMapper()
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err, "Map returned an error")
+	assert.Equal(t, src.Times, dst.Times, "time.Time slices not equal")
+}
+
+func TestMapAssignableStruct_timeTimeArray(t *testing.T) {
+	type Src struct {
+		Times [2]time.Time
+	}
+	type Dst struct {
+		Times [2]time.Time
+	}
+
+	now := time.Now()
+	src := Src{Times: [2]time.Time{now, now.Add(time.Hour)}}
+	dst := Dst{}
+
+	mapper := NewMapper()
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err, "Map returned an error")
+	assert.Equal(t, src.Times, dst.Times, "time.Time arrays not equal")
+}
+
+func TestMapAssignableStruct_timeTimeMap(t *testing.T) {
+	type Src struct {
+		Times map[string]time.Time
+	}
+	type Dst struct {
+		Times map[string]time.Time
+	}
+
+	now := time.Now()
+	src := Src{Times: map[string]time.Time{"a": now, "b": now.Add(time.Hour)}}
+	dst := Dst{}
+
+	mapper := NewMapper()
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err, "Map returned an error")
+	assert.Equal(t, src.Times, dst.Times, "time.Time maps not equal")
+}
+
+// AI generated code end
+
+// AI generated code start
+// --- Deeply Nested Structs ---
+func TestMap_DeeplyNestedStructs(t *testing.T) {
+	type Inner struct{ Value int }
+	type Middle struct{ Inner Inner }
+	type Outer struct{ Middle Middle }
+
+	src := Outer{Middle: Middle{Inner: Inner{Value: 42}}}
+	var dst Outer
+
+	mapper := NewMapper()
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err)
+	assert.Equal(t, src, dst)
+}
+
+// --- Pointer-to-Value and Value-to-Pointer Mapping ---
+func TestMap_PointerToValueAndViceVersa(t *testing.T) {
+	type S struct{ V *int }
+	type D struct{ V int }
+	val := 99
+	src := S{V: &val}
+	var dst D
+
+	mapper := NewMapper()
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err)
+	assert.Equal(t, val, dst.V)
+
+	// Value to pointer
+	type S2 struct{ V int }
+	type D2 struct{ V *int }
+	src2 := S2{V: 123}
+	var dst2 D2
+	err = mapper.Map(src2, &dst2)
+	assert.Nil(t, err)
+	assert.NotNil(t, dst2.V)
+	assert.Equal(t, src2.V, *dst2.V)
+}
+
+// --- Nil Handling ---
+func TestMap_NilPointerSliceMap(t *testing.T) {
+	type S struct {
+		P *int
+		S []int
+		M map[string]int
+	}
+	type D = S
+
+	src := S{}
+	var dst D
+	mapper := NewMapper()
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err)
+	assert.Nil(t, dst.P)
+	assert.Nil(t, dst.S)
+	assert.Nil(t, dst.M)
+}
+
+// --- Unexported Fields ---
+func TestMap_UnexportedFieldsIgnored(t *testing.T) {
+	type S struct {
+		Exported   int
+		unexported int
+	}
+	type D struct {
+		Exported   int
+		unexported int
+	}
+	src := S{Exported: 1, unexported: 2}
+	var dst D
+	mapper := NewMapper()
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, dst.Exported)
+	// Unexported field should remain zero
+	assert.Equal(t, 0, dst.unexported)
+}
+
+// --- Partial Overlap ---
+func TestMap_PartialFieldOverlap(t *testing.T) {
+	type S struct{ A, B int }
+	type D struct{ B, C int }
+	src := S{A: 1, B: 2}
+	var dst D
+	mapper := NewMapper()
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, dst.B)
+	assert.Equal(t, 0, dst.C)
+}
+
+// --- Custom Setter/Getter with Different Types ---
+type DstWithSetter struct {
+	val int
+}
+
+func (d *DstWithSetter) SetVal(v string) { d.val = len(v) }
+
+type SrcWithGetter struct{}
+
+func (s SrcWithGetter) GetVal() int { return 42 }
+
+func TestMap_SetterGetterTypeMismatch(t *testing.T) {
+	src := SrcWithGetter{}
+	dst := DstWithSetter{}
+	mapper := NewMapper()
+	err := mapper.Map(src, &dst)
+	assert.Equal(t, ErrMismatchType, err)
+}
+
+// --- Map Key/Value Conversion ---
+func TestMap_MapKeyValueTypeConversion(t *testing.T) {
+	type S struct{ M map[string]int }
+	type D struct{ M map[string]string }
+	mapper := NewMapper()
+	AddTypeConverter[int, string](mapper, func(src any) (any, error) {
+		return fmt.Sprintf("%d", src.(int)), nil
+	})
+	src := S{M: map[string]int{"a": 1, "b": 2}}
+	var dst D
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err)
+	assert.Equal(t, map[string]string{"a": "1", "b": "2"}, dst.M)
+}
+
+// --- Empty/Zero Value Handling ---
+func TestMap_ZeroValues(t *testing.T) {
+	type S struct {
+		A int
+		B []int
+	}
+	type D struct {
+		A int
+		B []int
+	}
+	src := S{}
+	var dst D
+	mapper := NewMapper()
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err)
+	assert.Equal(t, 0, dst.A)
+	assert.Nil(t, dst.B)
+}
+
+// --- Unsupported Types ---
+func TestMap_UnsupportedTypes(t *testing.T) {
+	type S struct {
+		F func()
+		C chan int
+		U unsafe.Pointer
+	}
+	type D S
+	src := S{}
+	var dst D
+	mapper := NewMapper()
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err) // Should ignore unsupported types, not error
+}
+
+// --- Multiple Type Converters ---
+func TestMap_MultipleTypeConverters(t *testing.T) {
+	type S struct{ V int }
+	type D struct{ V string }
+	mapper := NewMapper()
+	AddTypeConverter[int, string](mapper, func(src any) (any, error) {
+		return fmt.Sprintf("int:%d", src.(int)), nil
+	})
+	AddTypeConverter[int, string](mapper, func(src any) (any, error) {
+		return fmt.Sprintf("override:%d", src.(int)), nil
+	})
+	src := S{V: 5}
+	var dst D
+	err := mapper.Map(src, &dst)
+	assert.Nil(t, err)
+	assert.Equal(t, "override:5", dst.V)
+}
+
+// --- AddTypeConverter Edge Cases ---
+func TestMap_AddTypeConverterEdgeCases(t *testing.T) {
+	type S struct{ V int }
+	type D struct{ V string }
+	mapper := NewMapper()
+	// Add a converter for types that are not assignable
+	AddTypeConverter[float64, string](mapper, func(src any) (any, error) {
+		return "should not be used", nil
+	})
+	src := S{V: 1}
+	var dst D
+	err := mapper.Map(src, &dst)
+	assert.Equal(t, ErrMismatchType, err)
+	// Overwrite existing converter
+	AddTypeConverter[int, string](mapper, func(src any) (any, error) {
+		return "new", nil
+	})
+	src = S{V: 2}
+	dst = D{}
+	err = mapper.Map(src, &dst)
+	assert.Nil(t, err)
+	assert.Equal(t, "new", dst.V)
 }
 
 // AI generated code end

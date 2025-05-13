@@ -16,14 +16,15 @@ var ErrFieldNotFound error = fmt.Errorf("field not found")
 // AI generated code end
 
 type Mapper struct {
-	cfg MapperConfig
+	cfg mapperConfig
 }
 
 // NewMapper creates a new instance of Mapper
 func NewMapper() *Mapper {
 	return &Mapper{
-		cfg: MapperConfig{
-			fieldMaps: make(map[structMapKey]map[string]*FieldMapConfig),
+		cfg: mapperConfig{
+			//fieldMaps: make(map[structMapKey]map[string]*FieldMapConfig),
+			converters: make(map[structMapKey]func(src any) (dst any, err error)),
 		},
 	}
 }
@@ -84,84 +85,37 @@ func (m *Mapper) mapValue(src reflect.Value, dst reflect.Value) error {
 		return m.mapValue(src.Elem(), dst)
 	}
 
+	if m.hasTypeConverter(src, dst) {
+		converter := m.cfg.converters[structMapKey{
+			source:      src.Type(),
+			destination: dst.Type(),
+		}]
+		newVal, err := converter(src.Interface())
+		if err != nil {
+			return err
+		}
+
+		if newVal == nil {
+			dst.Set(reflect.Zero(dst.Type()))
+			return nil
+		}
+		if reflect.TypeOf(newVal) != dst.Type() {
+			return ErrMismatchType
+		}
+		dst.Set(reflect.ValueOf(newVal))
+		return nil
+	}
+
+	if src.Type().AssignableTo(dst.Type()) {
+		if dst.CanSet() {
+			dst.Set(src)
+		}
+		return nil
+	}
+
 	switch dst.Type().Kind() {
-	case reflect.Bool:
-		if src.Type().Kind() != reflect.Bool {
-			return ErrMismatchType
-		}
-		dst.SetBool(src.Bool())
-	case reflect.Int:
-		if src.Type().Kind() != reflect.Int {
-			return ErrMismatchType
-		}
-		dst.SetInt(src.Int())
-	case reflect.Int8:
-		if src.Type().Kind() != reflect.Int8 {
-			return ErrMismatchType
-		}
-		dst.SetInt(src.Int())
-	case reflect.Int16:
-		if src.Type().Kind() != reflect.Int16 {
-			return ErrMismatchType
-		}
-		dst.SetInt(src.Int())
-	case reflect.Int32:
-		if src.Type().Kind() != reflect.Int32 {
-			return ErrMismatchType
-		}
-		dst.SetInt(src.Int())
-	case reflect.Int64:
-		if src.Type().Kind() != reflect.Int64 {
-			return ErrMismatchType
-		}
-		dst.SetInt(src.Int())
-	case reflect.Uint:
-		if src.Type().Kind() != reflect.Uint {
-			return ErrMismatchType
-		}
-		dst.SetUint(src.Uint())
-	case reflect.Uint8:
-		if src.Type().Kind() != reflect.Uint8 {
-			return ErrMismatchType
-		}
-		dst.SetUint(src.Uint())
-	case reflect.Uint16:
-		if src.Type().Kind() != reflect.Uint16 {
-			return ErrMismatchType
-		}
-		dst.SetUint(src.Uint())
-	case reflect.Uint32:
-		if src.Type().Kind() != reflect.Uint32 {
-			return ErrMismatchType
-		}
-		dst.SetUint(src.Uint())
-	case reflect.Uint64:
-		if src.Type().Kind() != reflect.Uint64 {
-			return ErrMismatchType
-		}
-		dst.SetUint(src.Uint())
 	case reflect.Uintptr:
 		return nil // ignore
-	case reflect.Float32:
-		if src.Type().Kind() != reflect.Float32 {
-			return ErrMismatchType
-		}
-		dst.SetFloat(src.Float())
-	case reflect.Float64:
-		if src.Type().Kind() != reflect.Float64 {
-			return ErrMismatchType
-		}
-		dst.SetFloat(src.Float())
-	case reflect.Complex64:
-		if src.Type().Kind() != reflect.Complex64 {
-			return ErrMismatchType
-		}
-		dst.SetComplex(src.Complex())
-	case reflect.Complex128:
-		if src.Type().Kind() != reflect.Complex128 {
-			return ErrMismatchType
-		}
-		dst.SetComplex(src.Complex())
 	case reflect.Array:
 		if src.Type().Kind() != reflect.Array && src.Type().Kind() != reflect.Slice {
 			return ErrMismatchType
@@ -244,16 +198,11 @@ func (m *Mapper) mapValue(src reflect.Value, dst reflect.Value) error {
 			}
 			dst.Set(reflect.Append(dst, dstElem.Elem()))
 		}
-	case reflect.String:
-
-		if src.Type().Kind() != reflect.String {
-			return ErrMismatchType
-		}
-		dst.SetString(src.String())
 	case reflect.Struct:
 		if src.Type().Kind() != reflect.Struct {
 			return ErrMismatchType
 		}
+
 		err := m.mapStructFields(src, dst)
 		if err != nil {
 			return err
@@ -264,26 +213,24 @@ func (m *Mapper) mapValue(src reflect.Value, dst reflect.Value) error {
 		}
 	case reflect.UnsafePointer:
 		return nil // ignore
-
+	default:
+		return ErrMismatchType
 	}
 	return nil
 }
-
-func (m *Mapper) mapStructFields(src reflect.Value, dst reflect.Value) error {
+func (m *Mapper) hasTypeConverter(src reflect.Value, dst reflect.Value) bool {
 	structMapKey := structMapKey{
 		source:      src.Type(),
 		destination: dst.Type(),
 	}
-	fieldMaps := m.cfg.fieldMaps[structMapKey]
+	_, ok := m.cfg.converters[structMapKey]
+	return ok
+}
+
+func (m *Mapper) mapStructFields(src reflect.Value, dst reflect.Value) error {
 	for i := 0; i < dst.NumField(); i++ {
 		dstField := dst.Field(i)
-		fieldMap := fieldMaps[dst.Type().Field(i).Name]
 		srcFieldName := dst.Type().Field(i).Name
-		if fieldMap != nil {
-			if len(fieldMap.Source) > 0 {
-				srcFieldName = fieldMap.Source
-			}
-		}
 		srcField := src.FieldByName(srcFieldName)
 		var err error
 		if !srcField.IsValid() {
@@ -295,15 +242,10 @@ func (m *Mapper) mapStructFields(src reflect.Value, dst reflect.Value) error {
 			}
 			// AI generated code block end
 		}
-		if fieldMap == nil || fieldMap.GetDestinationValue == nil {
-			err = m.mapValue(srcField, dstField)
-		} else {
-			dstValue, err := fieldMap.GetDestinationValue(srcField.Interface())
-			if err != nil {
-				return err
-			}
-			dstField.Set(reflect.ValueOf(dstValue))
+		if !srcField.IsValid() {
+			return nil
 		}
+		err = m.mapValue(srcField, dstField)
 		if err != nil {
 			return err
 		}
@@ -315,23 +257,11 @@ func (m *Mapper) mapStructSetters(src reflect.Value, dst reflect.Value) error {
 	// AI generated code block start
 	// Handle setter methods
 	dstType := dst.Addr().Type()
-	structMapKey := structMapKey{
-		source:      src.Type(),
-		destination: dst.Type(),
-	}
-	fieldMaps := m.cfg.fieldMaps[structMapKey]
 	for i := 0; i < dstType.NumMethod(); i++ {
 		method := dstType.Method(i)
 		if method.Name[:3] == "Set" && method.Type.NumIn() == 2 && method.Type.NumOut() == 0 {
 			fieldName := method.Name[3:]
 			srcFieldName := fieldName
-			var fieldMap *FieldMapConfig
-			if fm, ok := fieldMaps[fieldName]; ok {
-				fieldMap = fm
-				if len(fieldMap.Source) > 0 {
-					srcFieldName = fieldMap.Source
-				}
-			}
 			srcField := src.FieldByName(srcFieldName)
 			if !srcField.IsValid() {
 				getterName := "Get" + srcFieldName
@@ -343,20 +273,11 @@ func (m *Mapper) mapStructSetters(src reflect.Value, dst reflect.Value) error {
 				}
 			}
 			if srcField.IsValid() {
-				var paramValue reflect.Value
-				if fieldMap == nil || fieldMap.GetDestinationValue == nil {
-					paramType := method.Type.In(1)
-					paramValue = reflect.New(paramType).Elem()
-					err := m.mapValue(srcField, paramValue)
-					if err != nil {
-						return err
-					}
-				} else {
-					dstValue, err := fieldMap.GetDestinationValue(srcField.Interface())
-					if err != nil {
-						return err
-					}
-					paramValue = reflect.ValueOf(dstValue)
+				paramType := method.Type.In(1)
+				paramValue := reflect.New(paramType).Elem()
+				err := m.mapValue(srcField, paramValue)
+				if err != nil {
+					return err
 				}
 				setterMethod := dst.Addr().MethodByName(method.Name)
 				setterMethod.Call([]reflect.Value{paramValue})

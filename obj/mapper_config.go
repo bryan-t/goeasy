@@ -1,10 +1,33 @@
 package obj
 
 import (
-	"fmt"
 	"reflect"
 )
 
+type structMapKey struct {
+	source      reflect.Type
+	destination reflect.Type
+}
+
+type mapperConfig struct {
+	//fieldMaps  map[structMapKey]map[string]*FieldMapConfig
+	converters map[structMapKey]func(src any) (dst any, err error)
+}
+
+// AddTypeConverter allows adding a custom type converter for a given source and destination type.
+func AddTypeConverter[sourceT any, destinationT any](mapper *Mapper, fn func(src any) (dst any, err error)) {
+	var zeroSource sourceT
+	var zeroDestination destinationT
+	sourceType := reflect.TypeOf(zeroSource)
+	destinationType := reflect.TypeOf(zeroDestination)
+	structKey := structMapKey{
+		source:      sourceType,
+		destination: destinationType,
+	}
+	mapper.cfg.converters[structKey] = fn
+}
+
+/* Commenting out due to problems with supporting nested structs and assignable
 // FieldMapConfig contains configuration on how to transform a given field of
 // a struct.
 type FieldMapConfig struct {
@@ -13,14 +36,9 @@ type FieldMapConfig struct {
 	GetDestinationValue func(source any) (any, error)
 }
 
-type structMapKey struct {
-	source      reflect.Type
-	destination reflect.Type
-}
 
-type MapperConfig struct {
-	fieldMaps map[structMapKey]map[string]*FieldMapConfig
-}
+
+
 
 // ConfigureFieldMaps allows overriding of how fields are mapped for sourceT and destinationT
 func ConfigureFieldMaps[sourceT any, destinationT any](mapper *Mapper,
@@ -53,3 +71,4 @@ func ConfigureFieldMaps[sourceT any, destinationT any](mapper *Mapper,
 	mapper.cfg.fieldMaps[structKey] = fieldMap
 	return nil
 }
+*/
