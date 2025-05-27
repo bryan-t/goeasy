@@ -243,7 +243,7 @@ func (m *Mapper) mapStructFields(src reflect.Value, dst reflect.Value) error {
 			// AI generated code block end
 		}
 		if !srcField.IsValid() {
-			return nil
+			continue
 		}
 		err = m.mapValue(srcField, dstField)
 		if err != nil {
